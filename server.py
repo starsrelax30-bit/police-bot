@@ -9,6 +9,8 @@ from flask import Flask, render_template, request, jsonify
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler
+from aiohttp import web as aiohttp_web
 import sqlite3
 
 # ---------- НАСТРОЙКИ ----------
@@ -43,7 +45,6 @@ def save_state(user_id, state_dict):
     conn.close()
 
 def generate_sync(prompt):
-    # Заглушка вместо нейросети
     if "Сводка:" in prompt:
         return ("Сводка: В городе напряжённая обстановка. Возможны стычки в Промзоне.\n"
                 "Действие1: Подавить бунт в Промзоне\n"
@@ -180,7 +181,7 @@ def api_squad_action():
     save_state(user_id, state)
     return jsonify({"result": result_msg, "budget": state['budget'], "squads": state['squads']})
 
-# ---------- TELEGRAM BOT ----------
+# ---------- TELEGRAM BOT (WEBHOOK) ----------
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
@@ -189,15 +190,27 @@ async def cmd_start(message: types.Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🎮 Играть", web_app=WebAppInfo(url=WEBAPP_URL))]])
     await message.answer("🛡️ «Глава полиции: Час расплаты»\nНажмите кнопку:", reply_markup=kb)
 
+# Вебхук эндпоинт (Flask)
+@app.route('/webhook', methods=['POST'])
+def flask_webhook():
+    # Передаём данные в aiogram через asyncio
+    import asyncio as aio
+    loop = aio.new_event_loop()
+    aio.set_event_loop(loop)
+    loop.run_until_complete(dp.feed_webhook_update(bot, request.get_json()))
+    loop.close()
+    return jsonify({"status": "ok"})
+
+# Установка вебхука при старте
+async def set_webhook():
+    await bot.set_webhook(f"{WEBAPP_URL}/webhook")
+
 # ---------- ЗАПУСК ----------
-async def run_bot():
-    await dp.start_polling(bot)
-
-def start_bot():
-    asyncio.run(run_bot())
-
 if __name__ == "__main__":
     init_db()
     port = int(os.environ.get('PORT', 8080))
-    threading.Thread(target=start_bot, daemon=True).start()
+    # Устанавливаем вебхук в фоне
+    def setup():
+        asyncio.run(set_webhook())
+    threading.Thread(target=setup, daemon=True).start()
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
