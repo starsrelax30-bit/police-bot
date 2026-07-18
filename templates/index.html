@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Глава полиции: Час расплаты</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; background: #0d0d1a; color: #d0d0d0; font-size: 14px; }
+        .hidden { display: none !important; }
+        .screen { padding: 10px 10px 80px; }
+        .btn { display: block; width: 100%; padding: 12px; margin: 5px 0; background: #141428; color: #d0d0d0; border: 1px solid #2a2a4a; border-radius: 10px; font-size: 13px; cursor: pointer; }
+        .btn.green { border-color: #4CAF50; color: #4CAF50; }
+        .btn.red { border-color: #e94560; color: #e94560; }
+        .btn.orange { border-color: #FF9800; color: #FF9800; }
+        .top-bar { display: flex; gap: 4px; flex-wrap: wrap; padding: 8px; background: #141428; border-radius: 10px; margin-bottom: 8px; }
+        .stat { font-size: 11px; background: #1a1a35; padding: 4px 8px; border-radius: 6px; }
+        .stat.red { color: #e94560; }
+        .stat.green { color: #4CAF50; }
+        .tabs { display: flex; gap: 3px; margin: 8px 0; flex-wrap: wrap; }
+        .tab { flex: 1; padding: 8px; text-align: center; background: #141428; border-radius: 8px; font-size: 10px; cursor: pointer; border: 1px solid #2a2a4a; }
+        .tab.active { border-color: #e94560; }
+        .card { background: #141428; padding: 12px; border-radius: 10px; margin: 6px 0; border: 1px solid #2a2a4a; }
+        .map-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; margin: 8px 0; }
+        .district { padding: 10px; border-radius: 8px; text-align: center; font-size: 10px; cursor: pointer; border: 2px solid transparent; }
+        .district.selected { border-color: #fff; }
+        .modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); display: flex; justify-content: center; align-items: center; z-index: 1000; }
+        .modal-content { background: #141428; padding: 16px; border-radius: 12px; max-width: 90%; }
+        .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; display: flex; background: #0d0d1a; border-top: 1px solid #2a2a4a; padding: 6px; }
+        .nav-btn { flex: 1; padding: 8px; text-align: center; font-size: 10px; background: none; border: none; color: #888; cursor: pointer; }
+        .nav-btn.active { color: #e94560; }
+    </style>
+</head>
+<body>
+    <div id="menu-screen" class="screen">
+        <h2>🛡️ Глава полиции</h2>
+        <p style="color:#e94560;">Час расплаты</p>
+        <button class="btn green" onclick="startGame('captain')">🟢 Капитан — 15M ₽</button>
+        <button class="btn orange" onclick="startGame('major')">🟡 Майор — 10M ₽</button>
+        <button class="btn red" onclick="startGame('colonel')">🔴 Полковник — 6M ₽</button>
+    </div>
+    <div id="game-screen" class="screen hidden">
+        <div class="top-bar" id="top-bar"></div>
+        <div class="tabs">
+            <div class="tab active" data-tab="main">📋</div>
+            <div class="tab" data-tab="map">🗺️</div>
+            <div class="tab" data-tab="squads">🚔</div>
+            <div class="tab" data-tab="units">🏢</div>
+            <div class="tab" data-tab="gov">🏛️</div>
+        </div>
+        <div id="tab-main"></div>
+        <div id="tab-map" class="hidden"></div>
+        <div id="tab-squads" class="hidden"></div>
+        <div id="tab-units" class="hidden"></div>
+        <div id="tab-gov" class="hidden"></div>
+        <div class="bottom-nav">
+            <button class="nav-btn active" data-tab="main">📋</button>
+            <button class="nav-btn" data-tab="map">🗺️</button>
+            <button class="nav-btn" data-tab="squads">🚔</button>
+            <button class="nav-btn" data-tab="units">🏢</button>
+            <button class="nav-btn" data-tab="gov">🏛️</button>
+        </div>
+    </div>
+    <div id="modal" class="modal hidden"><div class="modal-content" id="modal-content"></div></div>
+    <script>
+        const TG = window.Telegram.WebApp; TG.ready(); TG.expand();
+        const USER_ID = TG.initDataUnsafe?.user?.id || 1;
+        let gameState = null, selectedDistrict = null;
+
+        async function api(url, body = {}) {
+            const res = await fetch(url, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({user_id: USER_ID, ...body}) });
+            return await res.json();
+        }
+
+        function switchTab(t) {
+            document.querySelectorAll('.tab,.nav-btn').forEach(e => e.classList.remove('active'));
+            document.querySelectorAll(`[data-tab="${t}"]`).forEach(e => e.classList.add('active'));
+            ['main','map','squads','units','gov'].forEach(x => document.getElementById(`tab-${x}`).classList.add('hidden'));
+            document.getElementById(`tab-${t}`).classList.remove('hidden');
+            if (t==='main') renderMain(); if (t==='map') renderMap(); if (t==='squads') renderSquads(); if (t==='units') renderUnits(); if (t==='gov') renderGov();
+        }
+
+        document.querySelectorAll('.tab,.nav-btn').forEach(e => e.addEventListener('click', () => switchTab(e.dataset.tab)));
+
+        async function startGame(diff) {
+            const d = await api('/api/new_game', {difficulty: diff});
+            if (d.status === 'ok') { gameState = d.state; document.getElementById('menu-screen').classList.add('hidden'); document.getElementById('game-screen').classList.remove('hidden'); updateTopBar(); switchTab('main'); }
+        }
+
+        function updateTopBar() {
+            const s = gameState;
+            document.getElementById('top-bar').innerHTML = `<span class="stat">📅 ${s.day}</span><span class="stat">💰 ${(s.budget||0).toLocaleString()} ₽</span><span class="stat ${s.threat>70?'red':'green'}">⚠️ ${s.threat}%</span><span class="stat ${s.stability<30?'red':'green'}">🏙️ ${s.stability}%</span>`;
+        }
+
+        function renderMain() {
+            const s = gameState; let h = '';
+            if (s.game_over) { h += `<div class="card">Игра завершена. День ${s.day}</div><button class="btn green" onclick="startGame('${s.difficulty||'major'}')">Новая игра</button>`; }
+            else if (!s.day_started) { h += `<div class="card">День ${s.day}</div><button class="btn green" onclick="doStartDay()">📅 Начать день</button>`; }
+            else {
+                h += `<div class="card">${s.last_summary||''}</div>`;
+                (s.pending_actions||[]).forEach(a => h += `<button class="btn" onclick="doAction('${a}')">${a}</button>`);
+                h += `<button class="btn red" onclick="doEndDay()">🌙 Завершить день</button>`;
+            }
+            document.getElementById('tab-main').innerHTML = h;
+        }
+
+        async function doStartDay() {
+            const d = await api('/api/start_day');
+            if (d.error) { alert(d.error); return; }
+            gameState.day_started = true; gameState.last_summary = d.summary; gameState.pending_actions = d.actions; gameState.budget = d.budget; updateTopBar(); renderMain();
+        }
+
+        async function doAction(a) {
+            const d = await api('/api/action', {action: a});
+            if (d.error) { alert(d.error); return; }
+            gameState.budget = d.budget; gameState.threat = d.threat; gameState.stability = d.stability; updateTopBar();
+            document.getElementById('modal-content').innerHTML = `<p>${d.result}</p><button class="btn" onclick="document.getElementById('modal').classList.add('hidden')">OK</button>`;
+            document.getElementById('modal').classList.remove('hidden'); renderMain();
+        }
+
+        async function doEndDay() {
+            const d = await api('/api/end_day');
+            gameState.day = d.day; gameState.day_started = false; gameState.budget = d.budget; gameState.game_over = d.game_over; updateTopBar();
+            if (d.night_event) alert(d.night_event);
+            if (d.game_over) alert(d.game_over_msg);
+            renderMain();
+        }
+
+        function renderMap() {
+            let h = '<div class="map-grid">';
+            for (const [n, r] of Object.entries(gameState.riots||{})) {
+                const c = r>70?'#e94560':r>40?'#FF9800':'#4CAF50';
+                h += `<div class="district${selectedDistrict===n?' selected':''}" style="border-color:${c}" onclick="selectedDistrict='${n}';renderMap();">${n}<br>${r}%</div>`;
+            }
+            h += '</div>';
+            if (selectedDistrict) h += `<div class="card">📍 ${selectedDistrict}<br><button class="btn" onclick="extra('patrol')">👮 Патруль</button><button class="btn" onclick="extra('suppress')">🚨 Подавить</button><button class="btn" onclick="extra('raid')">🏪 Рейд</button></div>`;
+            document.getElementById('tab-map').innerHTML = h;
+        }
+
+        async function extra(t) {
+            const d = await api('/api/extra_action', {action_type: t, district: selectedDistrict||'Центр'});
+            if (d.error) { alert(d.error); return; }
+            gameState.budget = d.budget; gameState.riots = d.riots; updateTopBar(); alert(d.result); renderMap();
+        }
+
+        function renderSquads() {
+            let h = '';
+            (gameState.squads||[]).forEach(s => h += `<div class="card">${s.name} (${s.type}) 📍${s.location} 💪${s.strength}</div>`);
+            h += '<button class="btn green" onclick="squadAct(\'form\',{type:\'патруль\'})">+ Патруль (2M)</button>';
+            document.getElementById('tab-squads').innerHTML = h;
+        }
+
+        async function squadAct(c, p) {
+            const d = await api('/api/squad_action', {command: c, params: p});
+            if (d.error) alert(d.error); else { gameState.budget = d.budget; gameState.squads = d.squads; updateTopBar(); renderSquads(); }
+        }
+
+        function renderUnits() {
+            const u = gameState.special_units||{};
+            let h = `<div class="card">Коррупция: ${gameState.corruption||0}%</div>`;
+            if (!u.dps) h += '<button class="btn" onclick="createUnit(\'dps\')">🚔 ДПС (3M)</button>';
+            if (!u.obep) h += '<button class="btn" onclick="createUnit(\'obep\')">🕵️ ОБЭП (4M)</button>';
+            if (!u.sk) h += '<button class="btn" onclick="createUnit(\'sk\')">⚖️ СК (5M)</button>';
+            if (!u.proc) h += '<button class="btn" onclick="createUnit(\'proc\')">🏛️ Прокуратура (3.5M)</button>';
+            if (!u.internal) h += '<button class="btn" onclick="createUnit(\'internal\')">🔍 Внутр. безоп. (2.5M)</button>';
+            document.getElementById('tab-units').innerHTML = h;
+        }
+
+        async function createUnit(t) {
+            const d = await api('/api/new_units', {unit_type: t});
+            if (d.error) alert(d.error); else { gameState.budget = d.budget; gameState.special_units = d.special_units; updateTopBar(); renderUnits(); }
+        }
+
+        function renderGov() {
+            let h = '';
+            ['Армия','Росгвардия','МЧС','ФСБ','Мэрия','СМИ'].forEach(s => h += `<button class="btn" onclick="govReq('${s}')">${s}</button>`);
+            document.getElementById('tab-gov').innerHTML = h;
+        }
+
+        async function govReq(s) {
+            const d = await api('/api/gov_request', {structure: s});
+            if (d.error) alert(d.error); else { gameState.budget = d.budget; updateTopBar(); alert(d.result); }
+        }
+    </script>
+</body>
+</html>
